@@ -1,0 +1,61 @@
+networks:
+  traefik-net:
+    external: true
+
+configs:
+  traefik_yaml:
+    content: |
+      global:
+        checkNewVersion: true
+      log:
+        level: WARN
+      api:
+        insecure: false
+        dashboard: false
+      ping: {}
+      providers:
+        docker:
+          exposedByDefault: true
+          watch: true
+        file:
+          directory: /etc/traefik/dynamic-certs
+          watch: true
+      entryPoints:
+        web:
+          address: :${EXPOSED_HTTP_PORT}
+          http:
+            redirections:
+              entryPoint:
+                to: websecure
+                scheme: https
+                permanent: true
+        websecure:
+          address: :${EXPOSED_HTTPS_PORT}
+
+services:
+  traefik:
+    image: "traefik:${TRAEFIK_TAG}"
+    container_name: "${TRAEFIK_CONTAINER_NAME:-traefik}"
+    command:
+      - "--providers.docker=true"
+    configs:
+      - source: traefik_yaml
+        target: /etc/traefik/traefik.yaml
+    ports:
+      - "${EXPOSED_HTTP_PORT}:${EXPOSED_HTTP_PORT}"
+      - "${EXPOSED_HTTPS_PORT}:${EXPOSED_HTTPS_PORT}"
+    volumes:
+      - ./certs:/certs/
+      - ./dynamic-certs:/etc/traefik/dynamic-certs
+      - "${TRAEFIK_DOCKER_SOCKET}:/var/run/docker.sock:ro"
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_MEMORY:-64M}
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"] 
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - traefik-net

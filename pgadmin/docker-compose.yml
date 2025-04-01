@@ -1,0 +1,25 @@
+networks:
+  traefik-net:
+    external: true
+
+services:
+  pgadmin:
+    image: dpage/pgadmin4:${PGADMIN_TAG:-latest}
+    container_name: ${PGADMIN_CONTAINER_NAME:-pgadmin4}
+    restart: ${PGADMIN_RESTART_POLICY:-always}
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_DISABLE_POSTFIX: true
+    # volumes:
+    #   - "${PGADMIN_VOLUME:-~/.local/share/docker-services/pgadmin}:/var/lib/pgadmin"
+    deploy:
+      resources:
+        limits:
+          memory: ${PGADMIN_MEMORY:-512M}
+    labels:
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.local.dev`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+    networks:
+      - traefik-net

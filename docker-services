@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+
+LOCAL_FOLDER=${HOME}.local/share/docker-services
+CERTS_PATH="traefik/certs"
+
+CA_KEY_PREFIX=ca-key
+CA_CERT_PREFIX=ca-cert
+
+# Ensure a command (run/edit) and a service name (e.g., pgadmin) are provided
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 {run|stop|logs|edit|purge|gen-ca|gen-certificate} <service_name>|<domain_name> (if gen_ca or gen_certificate)"
+    exit 1
+fi
+
+COMMAND=$1
+SERVICE=$2
+SERVICE_DIR="./${SERVICE}"
+
+# Check if the service directory exists
+if [[ ! -d "${SERVICE_DIR}" && ! "${COMMAND}" == "gen-certificate" && ! "${COMMAND}" == "gen-ca" ]]; then
+    echo "Error: Service '${SERVICE}' not found!"
+    exit 1
+fi
+
+case "$COMMAND" in
+    run)
+        echo "Starting ${SERVICE}..."
+        (cd "${SERVICE_DIR}" && docker compose --env-file .env up -d)
+        ;;
+    stop)
+        echo "Stopping ${SERVICE}"
+        (cd "${SERVICE_DIR}" && docker compose down --remove-orphans)
+        ;;
+    restart)
+        echo "Restating ${SERVICE}"
+        (cd "${SERVICE_DIR}" && docker compose restart)
+        ;;
+    logs)
+        (cd "${SERVICE_DIR}" && docker compose logs)
+        ;;
+    edit)
+        echo "Opening .env file for ${SERVICE}..."
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            open "${SERVICE_DIR}/.env"  # macOS
+        else
+            xdg-open "${SERVICE_DIR}/.env"  # Linux
+        fi
+        ;;
+    purge)
+        echo "Purging ${SERVICE} data volume."
+        rm -rf "${LOCAL_FOLDER}/${SERVICE}/*"
+        ;;
+    gen-ca)
+        ROOT_DOMAIN_NAME=$2
+        [ -z "${ROOT_DOMAIN_NAME}" ] && echo "Domaine name missing" && exit 1
+        
+        CA_KEY_PATH="$CERTS_PATH/$ROOT_DOMAIN_NAME/CA/$CA_KEY_PREFIX.pem"
+        CA_CERT_PATH="$CERTS_PATH/$ROOT_DOMAIN_NAME/CA/$CA_CERT_PREFIX.pem"
+
+        if [ -f "${CA_KEY_PATH}" ] || [ -f "${CA_CERT_PATH}" ]; then
+            echo "Already a CA with this key. Abort"
+            exit 1
+        fi
+
+        mkdir -p $CERTS_PATH/$ROOT_DOMAIN_NAME/CA/
+
+        # CA Private key generation
+        openssl genrsa -out "$CA_KEY_PATH" 4096
+
+        # CA certificate generation
+        openssl req \
+            -x509 \
+            -new \
+            -nodes \
+            -key "$CA_KEY_PATH" \
+            -sha256 \
+            -days 3650 \
+            -out "$CA_CERT_PATH" \
+            -subj "/CN=Local Dev Custom CA for $ROOT_DOMAIN_NAME"
+        ;;
+    gen-certificate)
+        IFS=$'\n\t'
+
+        ROOT_DOMAIN_NAME=$2
+        [ -z "${ROOT_DOMAIN_NAME}" ] && echo "Ca certificate missing" && exit 1
+
+        DOMAIN_NAME=$3
+        [ -z "${DOMAIN_NAME}" ] && echo "Domaine name missing" && exit 1
+
+        CA_KEY_PATH="$CERTS_PATH/$ROOT_DOMAIN_NAME/CA/$CA_KEY_PREFIX.pem"
+        CA_CERT_PATH="$CERTS_PATH/$ROOT_DOMAIN_NAME/CA/$CA_CERT_PREFIX.pem"
+
+        if [ ! -f "${CA_KEY_PATH}" ] || [ ! -f "${CA_CERT_PATH}" ]; then
+            echo "Missing CA file (one of them or both) :"
+            echo "${CA_KEY_PATH}"
+            echo "${CA_CERT_PATH}"
+            exit 1
+        fi
+
+        mkdir -p $CERTS_PATH/$DOMAIN_NAME
+        mkdir -p traefik/dynamic-certs
+
+        # Certificate private key generation
+        openssl genrsa -out "$CERTS_PATH/$DOMAIN_NAME/ssl-key.key" 2048
+
+        # CSR generation
+        openssl req \
+            -new \
+            -key "$CERTS_PATH/$DOMAIN_NAME/ssl-key.key" \
+            -out "$CERTS_PATH/$DOMAIN_NAME/ssl-csr.csr" \
+            -subj "/CN=*.$DOMAIN_NAME"
+
+        cat > "$CERTS_PATH/$DOMAIN_NAME/ssl-ext.cnf" <<EOF
+        
+[ v3_req ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = *.$DOMAIN_NAME
+DNS.2 = $DOMAIN_NAME
+EOF
+
+        # Service certificate generation
+        openssl x509 \
+            -req \
+            -in "$CERTS_PATH/$DOMAIN_NAME/ssl-csr.csr" \
+            -CA "$CA_CERT_PATH" \
+            -CAkey "$CA_KEY_PATH" \
+            -CAcreateserial \
+            -out "$CERTS_PATH/$DOMAIN_NAME/ssl-certificate.crt" \
+            -days 3650 \
+            -sha256 \
+            -extfile "$CERTS_PATH/$DOMAIN_NAME/ssl-ext.cnf" \
+            -extensions v3_req
+
+        rm -rf "$CERTS_PATH/$DOMAIN_NAME/ssl-ext.cnf"
+        rm -rf "$CERTS_PATH/$DOMAIN_NAME/ssl-csr.csr"
+
+        cat <<EOF > traefik/dynamic-certs/$DOMAIN_NAME.yml
+tls:
+  certificates:
+    - certFile: "/certs/$DOMAIN_NAME/ssl-certificate.crt"
+      keyFile: "/certs/$DOMAIN_NAME/ssl-key.key"
+EOF
+
+        ;;
+    *)
+        echo "Invalid command! Use 'run' or 'edit'."
+        exit 1
+        ;;
+esac
