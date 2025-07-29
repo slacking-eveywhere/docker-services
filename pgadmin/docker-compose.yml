@@ -11,8 +11,8 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
       PGADMIN_DISABLE_POSTFIX: true
-    # volumes:
-    #   - "${PGADMIN_VOLUME:-~/.local/share/docker-services/pgadmin}:/var/lib/pgadmin"
+    volumes:
+      - "${PGADMIN_VOLUME:-~/.local/share/docker-services/pgadmin/volumes}:/var/lib/pgadmin"
     deploy:
       resources:
         limits:
